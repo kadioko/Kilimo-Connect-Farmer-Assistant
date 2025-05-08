@@ -3,6 +3,20 @@ import { backupService } from './backupService';
 import { cloudSyncService } from './cloudSyncService';
 import { versionControlService } from './versionControlService';
 
+interface AsyncStorageType {
+  getItem(key: string): Promise<string | null>;
+  setItem(key: string, value: string): Promise<void>;
+  removeItem(key: string): Promise<void>;
+  clear(): Promise<void>;
+  getAllKeys(): Promise<readonly string[]>;
+  multiGet(keys: string[]): Promise<readonly [string, string | null][]>;
+  multiSet(keyValuePairs: [string, string][]): Promise<void>;
+  multiRemove(keys: string[]): Promise<void>;
+  mergeItem(key: string, value: string): Promise<void>;
+}
+
+const asyncStorage: AsyncStorageType = AsyncStorage as AsyncStorageType;
+
 const SCHEDULE_KEY = 'backup_schedule';
 const DEFAULT_SCHEDULE = {
   daily: true,
@@ -11,7 +25,7 @@ const DEFAULT_SCHEDULE = {
   lastBackup: null,
   lastSync: null,
   validationStatus: 'pending'
-};
+} as const;
 
 interface BackupSchedule {
   daily: boolean;
@@ -22,7 +36,105 @@ interface BackupSchedule {
   validationStatus: 'pending' | 'valid' | 'invalid';
 }
 
-export const backupSchedulerService = {
+interface BackupData {
+  id: string;
+  timestamp: number;
+  data: any;
+  type: 'pests' | 'favorites' | 'history';
+  status: 'pending' | 'completed' | 'failed';
+  error?: string;
+}
+
+interface BackupHistory {
+  id: string;
+  timestamp: number;
+  type: 'full' | 'incremental';
+  size: number;
+  status: 'completed' | 'failed';
+  error?: string;
+}
+
+interface BackupStats {
+  totalBackups: number;
+  successfulBackups: number;
+  failedBackups: number;
+  lastBackup: number | null;
+  nextBackup: number | null;
+  storageUsage: number;
+}
+
+interface BackupConfig {
+  enabled: boolean;
+  frequency: 'daily' | 'weekly' | 'monthly';
+  retentionPeriod: number;
+  maxBackups: number;
+  compressionEnabled: boolean;
+  encryptionEnabled: boolean;
+  storageLocation: 'local' | 'cloud';
+  lastBackup: number | null;
+  nextBackup: number | null;
+}
+
+interface BackupScheduleStats {
+  totalSchedules: number;
+  activeSchedules: number;
+  completedSchedules: number;
+  failedSchedules: number;
+  pendingSchedules: number;
+  lastSchedule: number | null;
+  nextSchedule: number | null;
+}
+
+interface BackupMetrics {
+  backupSize: number;
+  backupTime: number;
+  compressionRatio: number;
+  encryptionTime: number;
+  storageUsage: number;
+  networkUsage: number;
+}
+
+interface BackupPerformance {
+  backupSpeed: number;
+  restoreSpeed: number;
+  compressionSpeed: number;
+  encryptionSpeed: number;
+  networkSpeed: number;
+}
+
+interface BackupHealth {
+  status: 'healthy' | 'warning' | 'critical';
+  issues: string[];
+  recommendations: string[];
+  lastCheck: number;
+  nextCheck: number;
+}
+
+interface BackupAudit {
+  id: string;
+  timestamp: number;
+  type: 'backup' | 'restore' | 'schedule';
+  action: 'create' | 'update' | 'delete';
+  user: string;
+  ip: string;
+  device: string;
+  location: string;
+  success: boolean;
+  duration: number;
+  size: number;
+}
+
+export class BackupSchedulerService {
+  private static instance: BackupSchedulerService;
+  private constructor() {}
+
+  public static getInstance(): BackupSchedulerService {
+    if (!BackupSchedulerService.instance) {
+      BackupSchedulerService.instance = new BackupSchedulerService();
+    }
+    return BackupSchedulerService.instance;
+  }
+
   async initializeScheduler(): Promise<void> {
     try {
       // Load schedule settings
@@ -42,7 +154,7 @@ export const backupSchedulerService = {
     } catch (error) {
       console.error('Error initializing backup scheduler:', error);
     }
-  },
+  }
 
   async setSchedule(schedule: Partial<BackupSchedule>): Promise<void> {
     try {
@@ -52,22 +164,22 @@ export const backupSchedulerService = {
         ...currentSchedule,
         ...schedule
       };
-      await AsyncStorage.setItem(SCHEDULE_KEY, JSON.stringify(newSchedule));
+      await asyncStorage.setItem(SCHEDULE_KEY, JSON.stringify(newSchedule));
     } catch (error) {
       console.error('Error setting backup schedule:', error);
       throw error;
     }
-  },
+  }
 
   async getSchedule(): Promise<BackupSchedule | null> {
     try {
-      const scheduleString = await AsyncStorage.getItem(SCHEDULE_KEY);
+      const scheduleString = await asyncStorage.getItem(SCHEDULE_KEY);
       return scheduleString ? JSON.parse(scheduleString) : null;
     } catch (error) {
       console.error('Error getting backup schedule:', error);
       return null;
     }
-  },
+  }
 
   private startBackupScheduler(): void {
     // Run initial backup check
@@ -77,7 +189,7 @@ export const backupSchedulerService = {
     setInterval(() => {
       this.checkBackupSchedule();
     }, 60 * 60 * 1000); // Check every hour
-  },
+  }
 
   private async checkBackupSchedule(): Promise<void> {
     try {
@@ -104,7 +216,7 @@ export const backupSchedulerService = {
     } catch (error) {
       console.error('Error checking backup schedule:', error);
     }
-  },
+  }
 
   private async createScheduledBackup(type: 'daily' | 'weekly' | 'monthly'): Promise<void> {
     try {
@@ -132,7 +244,7 @@ export const backupSchedulerService = {
     } catch (error) {
       console.error(`Error creating scheduled ${type} backup:`, error);
     }
-  },
+  }
 
   private startSyncScheduler(): void {
     // Run initial sync check
@@ -142,7 +254,7 @@ export const backupSchedulerService = {
     setInterval(() => {
       this.checkSyncSchedule();
     }, 4 * 60 * 60 * 1000); // Check every 4 hours
-  },
+  }
 
   private async checkSyncSchedule(): Promise<void> {
     try {
@@ -167,7 +279,7 @@ export const backupSchedulerService = {
     } catch (error) {
       console.error('Error checking sync schedule:', error);
     }
-  },
+  }
 
   private startValidationChecker(): void {
     // Run initial validation
@@ -177,7 +289,7 @@ export const backupSchedulerService = {
     setInterval(() => {
       this.validateBackup();
     }, 24 * 60 * 60 * 1000); // Check every 24 hours
-  },
+  }
 
   private async validateBackup(): Promise<void> {
     try {
@@ -201,12 +313,12 @@ export const backupSchedulerService = {
 
       if (!isValid) {
         // Create new backup if validation fails
-        await this.createScheduledBackup('validation');
+        await this.createScheduledBackup('daily');
       }
     } catch (error) {
       console.error('Error validating backup:', error);
     }
-  },
+  }
 
   private async validateBackupIntegrity(backup: any): Promise<boolean> {
     try {

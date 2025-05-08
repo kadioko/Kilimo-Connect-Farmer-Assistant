@@ -10,17 +10,17 @@
     "web": "expo start --web"
   },
   "dependencies": {
+    "@react-native-async-storage/async-storage": "^1.21.0",
+    "@react-navigation/native": "^6.1.9",
+    "@react-navigation/stack": "^6.3.20",
+    "@tensorflow/tfjs": "^4.10.0",
+    "@tensorflow/tfjs-react-native": "^0.8.0",
     "expo": "~50.0.0",
     "react": "18.2.0",
     "react-native": "0.73.0",
-    "@react-navigation/native": "^6.1.9",
-    "@react-navigation/stack": "^6.3.20",
     "react-native-camera": "^4.2.1",
-    "react-native-sms": "^1.10.0",
     "react-native-offline": "^6.0.0",
-    "react-native-swahili": "^1.0.0",
-    "@tensorflow/tfjs": "^4.14.0",
-    "@tensorflow/tfjs-react-native": "^0.12.0"
+    "react-native-sms": "^1.10.0"
   },
   "devDependencies": {
     "@babel/core": "^7.20.0",
