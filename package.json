@@ -1,0 +1,33 @@
+{
+  "name": "kilimo-connect-farmer-assistant",
+  "version": "1.0.0",
+  "description": "A mobile app to help Tanzanian farmers access agricultural information",
+  "main": "index.js",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web"
+  },
+  "dependencies": {
+    "expo": "~50.0.0",
+    "react": "18.2.0",
+    "react-native": "0.73.0",
+    "@react-navigation/native": "^6.1.9",
+    "@react-navigation/stack": "^6.3.20",
+    "react-native-camera": "^4.2.1",
+    "react-native-sms": "^1.10.0",
+    "react-native-offline": "^6.0.0",
+    "react-native-swahili": "^1.0.0",
+    "@tensorflow/tfjs": "^4.14.0",
+    "@tensorflow/tfjs-react-native": "^0.12.0"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.20.0",
+    "@babel/preset-env": "^7.20.0",
+    "@babel/runtime": "^7.20.0",
+    "@react-native-community/eslint-config": "^3.2.0",
+    "eslint": "^8.19.0",
+    "expo-cli": "^6.0.0"
+  }
+}
