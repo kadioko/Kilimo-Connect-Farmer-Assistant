@@ -3,9 +3,10 @@ import { View, Text, StyleSheet, TouchableOpacity, Alert, FlatList, Switch } fro
 import { backupService } from '../services/backupService';
 import { cloudSyncService } from '../services/cloudSyncService';
 import { versionControlService } from '../services/versionControlService';
-import { BackupHistoryItem, BackupMetrics } from '../services/backupService';
+import { BackupHistoryItem, BackupMetrics, BackupData } from '../services/backupService';
 import { BackupSchedule } from '../services/backupSchedulerService';
-import { backupSchedulerService } from '../services';
+import { backupSchedulerService, backupValidationService } from '../services';
+import { BackupValidationResult } from '../services/backupValidationService';
 
 export const BackupScreen = () => {
   const [backupExists, setBackupExists] = useState(false);
@@ -16,6 +17,7 @@ export const BackupScreen = () => {
   const [validationStatus, setValidationStatus] = useState<'pending' | 'valid' | 'invalid' | null>(null);
   const [backupHistory, setBackupHistory] = useState<BackupHistoryItem[]>([]);
   const [backupMetrics, setBackupMetrics] = useState<BackupMetrics | null>(null);
+  const [validationResult, setValidationResult] = useState<BackupValidationResult | null>(null);
 
   useEffect(() => {
     checkBackupStatus();
@@ -24,6 +26,7 @@ export const BackupScreen = () => {
     checkSchedule();
     checkBackupHistory();
     checkBackupMetrics();
+    checkBackupValidation();
     
     // Check backup status periodically
     const interval = setInterval(() => {
@@ -33,6 +36,7 @@ export const BackupScreen = () => {
       checkSchedule();
       checkBackupHistory();
       checkBackupMetrics();
+      checkBackupValidation();
     }, 60000); // Check every minute
 
     return () => clearInterval(interval);
@@ -52,6 +56,18 @@ export const BackupScreen = () => {
       }
     } catch (error) {
       console.error('Error checking backup status:', error);
+    }
+  };
+
+  const checkBackupValidation = async () => {
+    try {
+      const result = await backupValidationService.validateBackup();
+      setValidationResult(result);
+      setValidationStatus(result.isValid ? 'valid' : 'invalid');
+    } catch (error) {
+      console.error('Error checking backup validation:', error);
+      setValidationResult(null);
+      setValidationStatus('invalid');
     }
   };
 
@@ -256,6 +272,88 @@ export const BackupScreen = () => {
                               validationStatus === 'valid' ? 'Imeundwa' : 
                               'Imeshindwa'}
           </Text>
+        )}
+      </View>
+
+      <View style={styles.validationContainer}>
+        <Text style={styles.validationTitle}>Backup Validation</Text>
+        {validationResult && (
+          <>
+            <View style={styles.validationRow}>
+              <Text style={styles.validationLabel}>Status:</Text>
+              <Text style={[
+                styles.validationValue,
+                validationResult.isValid ? styles.validationSuccess : styles.validationError
+              ]}>
+                {validationResult.isValid ? '✓ Valid' : '✗ Invalid'}
+              </Text>
+            </View>
+            
+            <View style={styles.validationRow}>
+              <Text style={styles.validationLabel}>Data Integrity:</Text>
+              <View style={styles.integrityContainer}>
+                <View style={styles.integrityItem}>
+                  <Text style={styles.integrityLabel}>Favorites:</Text>
+                  <Text style={[
+                    styles.integrityValue,
+                    validationResult.dataIntegrity.favorites ? styles.integritySuccess : styles.integrityError
+                  ]}>
+                    {validationResult.dataIntegrity.favorites ? '✓' : '✗'}
+                  </Text>
+                </View>
+                <View style={styles.integrityItem}>
+                  <Text style={styles.integrityLabel}>Pests:</Text>
+                  <Text style={[
+                    styles.integrityValue,
+                    validationResult.dataIntegrity.pests ? styles.integritySuccess : styles.integrityError
+                  ]}>
+                    {validationResult.dataIntegrity.pests ? '✓' : '✗'}
+                  </Text>
+                </View>
+                <View style={styles.integrityItem}>
+                  <Text style={styles.integrityLabel}>Version:</Text>
+                  <Text style={[
+                    styles.integrityValue,
+                    validationResult.dataIntegrity.version ? styles.integritySuccess : styles.integrityError
+                  ]}>
+                    {validationResult.dataIntegrity.version ? '✓' : '✗'}
+                  </Text>
+                </View>
+              </View>
+            </View>
+
+            {validationResult.errors.length > 0 && (
+              <View style={styles.validationErrors}>
+                <Text style={styles.errorTitle}>Errors:</Text>
+                {validationResult.errors.map((error, index) => (
+                  <Text key={index} style={styles.errorText}>• {error}</Text>
+                ))}
+              </View>
+            )}
+
+            {validationResult.warnings.length > 0 && (
+              <View style={styles.validationWarnings}>
+                <Text style={styles.warningTitle}>Warnings:</Text>
+                {validationResult.warnings.map((warning, index) => (
+                  <Text key={index} style={styles.warningText}>• {warning}</Text>
+                ))}
+              </View>
+            )}
+
+            <View style={styles.performanceContainer}>
+              <Text style={styles.performanceTitle}>Performance:</Text>
+              <View style={styles.performanceRow}>
+                <Text style={styles.performanceLabel}>Load Time:</Text>
+                <Text style={styles.performanceValue}>{validationResult.performance.loadTime}ms</Text>
+              </View>
+              <View style={styles.performanceRow}>
+                <Text style={styles.performanceLabel}>Size:</Text>
+                <Text style={styles.performanceValue}>
+                  {Math.round(validationResult.performance.size / 1024)}KB
+                </Text>
+              </View>
+            </View>
+          </>
         )}
       </View>
 
@@ -475,4 +573,110 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: 'bold',
   },
+  validationContainer: {
+    marginTop: 20,
+  },
+  validationTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    marginBottom: 10,
+  },
+  validationRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  validationLabel: {
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  validationValue: {
+    fontSize: 16,
+  },
+  validationSuccess: {
+    color: '#4CAF50',
+  },
+  validationError: {
+    color: '#F44336',
+  },
+  validationPending: {
+    color: '#2196F3',
+  },
+  integrityContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  integrityItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  integrityLabel: {
+    fontSize: 14,
+    marginRight: 5,
+  },
+  integrityValue: {
+    fontSize: 14,
+  },
+  integritySuccess: {
+    color: '#4CAF50',
+  },
+  integrityError: {
+    color: '#F44336',
+  },
+  validationErrors: {
+    marginTop: 10,
+    backgroundColor: '#ffebee',
+    padding: 10,
+    borderRadius: 4,
+  },
+  errorTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginBottom: 5,
+  },
+  errorText: {
+    fontSize: 14,
+    color: '#F44336',
+  },
+  validationWarnings: {
+    marginTop: 10,
+    backgroundColor: '#fff3e0',
+    padding: 10,
+    borderRadius: 4,
+  },
+  warningTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginBottom: 5,
+  },
+  warningText: {
+    fontSize: 14,
+    color: '#F57C00',
+  },
+  performanceContainer: {
+    marginTop: 20,
+  },
+  performanceTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginBottom: 10,
+  },
+  performanceRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 5,
+  },
+  performanceLabel: {
+    fontSize: 14,
+  },
+  performanceValue: {
+    fontSize: 14,
+    fontWeight: 'bold',
+  },
 });
+
+export default BackupScreen;

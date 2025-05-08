@@ -7,7 +7,7 @@ const BACKUP_HISTORY_KEY = 'backup_history';
 const BACKUP_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
 const MAX_BACKUPS = 7; // Keep last 7 backups
 
-interface BackupData {
+export interface BackupData {
   timestamp: number;
   favorites: string[];
   pestCache: Record<string, any>;
