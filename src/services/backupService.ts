@@ -111,7 +111,11 @@ export const backupService = {
       // Restore pest cache
       await pestCacheService.clearCache();
       for (const [pestName, pestData] of Object.entries(backupData.pestCache)) {
-        await pestCacheService.savePest(pestData);
+        try {
+          await pestCacheService.savePest(pestData as any);
+        } catch (error) {
+          console.error(`Error restoring pest ${pestName}:`, error);
+        }
       }
 
       console.log('Backup restored successfully');
@@ -181,9 +185,11 @@ export const backupService = {
   async deleteBackup(): Promise<void> {
     try {
       await AsyncStorage.removeItem(BACKUP_KEY);
-      console.log('Backup deleted successfully');
+      await AsyncStorage.removeItem(BACKUP_HISTORY_KEY);
+      console.log('Backup and history deleted successfully');
     } catch (error) {
       console.error('Error deleting backup:', error);
+      throw error;
     }
   }
 };
