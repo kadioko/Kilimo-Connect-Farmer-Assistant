@@ -3,21 +3,27 @@ import { View, Text, StyleSheet, TouchableOpacity, Alert, FlatList, Switch } fro
 import { backupService } from '../services/backupService';
 import { cloudSyncService } from '../services/cloudSyncService';
 import { versionControlService } from '../services/versionControlService';
-import { backupSchedulerService } from '../services/backupSchedulerService';
+import { BackupHistoryItem, BackupMetrics } from '../services/backupService';
+import { BackupSchedule } from '../services/backupSchedulerService';
+import { backupSchedulerService } from '../services';
 
 export const BackupScreen = () => {
   const [backupExists, setBackupExists] = useState(false);
   const [lastBackupTime, setLastBackupTime] = useState<string | null>(null);
   const [syncStatus, setSyncStatus] = useState<'pending' | 'synced' | 'failed' | null>(null);
-  const [versionHistory, setVersionHistory] = useState<Version[]>([]);
+  const [versionHistory, setVersionHistory] = useState<string[]>([]);
   const [schedule, setSchedule] = useState<BackupSchedule | null>(null);
   const [validationStatus, setValidationStatus] = useState<'pending' | 'valid' | 'invalid' | null>(null);
+  const [backupHistory, setBackupHistory] = useState<BackupHistoryItem[]>([]);
+  const [backupMetrics, setBackupMetrics] = useState<BackupMetrics | null>(null);
 
   useEffect(() => {
     checkBackupStatus();
     checkSyncStatus();
     checkVersionHistory();
     checkSchedule();
+    checkBackupHistory();
+    checkBackupMetrics();
     
     // Check backup status periodically
     const interval = setInterval(() => {
@@ -25,6 +31,8 @@ export const BackupScreen = () => {
       checkSyncStatus();
       checkVersionHistory();
       checkSchedule();
+      checkBackupHistory();
+      checkBackupMetrics();
     }, 60000); // Check every minute
 
     return () => clearInterval(interval);
@@ -44,6 +52,24 @@ export const BackupScreen = () => {
       }
     } catch (error) {
       console.error('Error checking backup status:', error);
+    }
+  };
+
+  const checkBackupHistory = async () => {
+    try {
+      const history = await backupService.getBackupHistory();
+      setBackupHistory(history);
+    } catch (error) {
+      console.error('Error checking backup history:', error);
+    }
+  };
+
+  const checkBackupMetrics = async () => {
+    try {
+      const metrics = await backupService.getBackupMetrics();
+      setBackupMetrics(metrics);
+    } catch (error) {
+      console.error('Error checking backup metrics:', error);
     }
   };
 

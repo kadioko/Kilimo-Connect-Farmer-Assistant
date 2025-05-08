@@ -3,13 +3,34 @@ import { favoritesService } from './favoritesService';
 import { pestCacheService } from './pestCacheService';
 
 const BACKUP_KEY = 'app_backup';
+const BACKUP_HISTORY_KEY = 'backup_history';
 const BACKUP_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
+const MAX_BACKUPS = 7; // Keep last 7 backups
 
 interface BackupData {
   timestamp: number;
   favorites: string[];
   pestCache: Record<string, any>;
   version: string;
+}
+
+export interface BackupHistoryItem {
+  id: string;
+  timestamp: number;
+  size: number;
+  version: string;
+  status: 'success' | 'failed';
+  error?: string;
+}
+
+export interface BackupMetrics {
+  totalBackups: number;
+  successfulBackups: number;
+  failedBackups: number;
+  lastBackup: number | null;
+  lastSuccessfulBackup: number | null;
+  backupSize: number;
+  backupTime: number;
 }
 
 export const backupService = {
@@ -46,8 +67,27 @@ export const backupService = {
         version: '1.0.0'
       };
 
+      // Convert to string and get size
+      const backupString = JSON.stringify(backupData);
+      const backupSize = backupString.length;
+
       // Save backup
-      await AsyncStorage.setItem(BACKUP_KEY, JSON.stringify(backupData));
+      await AsyncStorage.setItem(BACKUP_KEY, backupString);
+
+      // Update backup history
+      const history = await this.getBackupHistory();
+      const newHistoryItem: BackupHistoryItem = {
+        id: Date.now().toString(),
+        timestamp: Date.now(),
+        size: backupSize,
+        version: '1.0.0',
+        status: 'success'
+      };
+
+      // Add new item and keep only last MAX_BACKUPS items
+      const updatedHistory = [newHistoryItem, ...(history || [])].slice(0, MAX_BACKUPS);
+      await AsyncStorage.setItem(BACKUP_HISTORY_KEY, JSON.stringify(updatedHistory));
+
       console.log('Backup created successfully');
     } catch (error) {
       console.error('Error creating backup:', error);
@@ -84,10 +124,57 @@ export const backupService = {
   async getBackup(): Promise<BackupData | null> {
     try {
       const backupString = await AsyncStorage.getItem(BACKUP_KEY);
-      return backupString ? JSON.parse(backupString) : null;
+      if (!backupString) return null;
+      
+      // Validate backup data
+      const backupData = JSON.parse(backupString) as BackupData;
+      if (!backupData.timestamp || !backupData.favorites || !backupData.pestCache || !backupData.version) {
+        throw new Error('Invalid backup data');
+      }
+
+      return backupData;
     } catch (error) {
       console.error('Error getting backup:', error);
       return null;
+    }
+  },
+
+  async getBackupHistory(): Promise<BackupHistoryItem[]> {
+    try {
+      const historyString = await AsyncStorage.getItem(BACKUP_HISTORY_KEY);
+      return historyString ? JSON.parse(historyString) : [];
+    } catch (error) {
+      console.error('Error getting backup history:', error);
+      return [];
+    }
+  },
+
+  async getBackupMetrics(): Promise<BackupMetrics> {
+    try {
+      const history = await this.getBackupHistory();
+      const lastBackup = history.length > 0 ? history[0].timestamp : 0;
+      const lastSuccessfulBackup = history.find(h => h.status === 'success')?.timestamp || 0;
+
+      return {
+        totalBackups: history.length,
+        successfulBackups: history.filter(h => h.status === 'success').length,
+        failedBackups: history.filter(h => h.status === 'failed').length,
+        lastBackup,
+        lastSuccessfulBackup,
+        backupSize: history.reduce((sum, item) => sum + item.size, 0),
+        backupTime: history[0]?.timestamp || 0
+      };
+    } catch (error) {
+      console.error('Error getting backup metrics:', error);
+      return {
+        totalBackups: 0,
+        successfulBackups: 0,
+        failedBackups: 0,
+        lastBackup: null,
+        lastSuccessfulBackup: null,
+        backupSize: 0,
+        backupTime: null
+      };
     }
   },
 

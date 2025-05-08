@@ -27,7 +27,7 @@ const DEFAULT_SCHEDULE = {
   validationStatus: 'pending'
 } as const;
 
-interface BackupSchedule {
+export interface BackupSchedule {
   daily: boolean;
   weekly: boolean;
   monthly: boolean;
