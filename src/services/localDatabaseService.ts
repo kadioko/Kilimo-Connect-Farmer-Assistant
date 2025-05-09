@@ -1,12 +1,24 @@
-import SQLite from 'react-native-sqlite-storage';
+import SQLite, { SQLiteDatabase, Transaction, ResultSet, ResultSetRowList } from 'react-native-sqlite-storage';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { backupService } from './backupService';
 import { versionControlService } from './versionControlService';
 import { databaseOptimizationService } from './databaseOptimizationService';
+import { CacheService } from './cacheService';
 import { databaseMigrationService } from './databaseMigrationService';
 import { offlineSyncService } from './offlineSyncService';
 
-const DATABASE_NAME = 'kilimo_connect.db';
-const DATABASE_VERSION = '1.0';
+interface Pest {
+  id?: number;
+  name: string;
+  description: string;
+  symptoms: string[];
+  treatments: string[];
+  image_urls: string[];
+  last_detected_at?: string;
+  detection_count?: number;
+  created_at?: string;
+  updated_at?: string;
+}
 
 interface DatabaseConfig {
   name: string;
@@ -33,125 +45,238 @@ interface DatabaseSchema {
   }[];
 }
 
-export const localDatabaseService = {
+const DATABASE_CONFIG: DatabaseConfig = {
+  name: 'kilimo_connect.db',
+  version: '1.0',
+  size: 200000,
+  location: 'default'
+};
+
+const DATABASE_SCHEMA: DatabaseSchema = {
+  tables: [
+    {
+      name: 'pests',
+      columns: [
+        { name: 'id', type: 'INTEGER', primaryKey: true },
+        { name: 'name', type: 'TEXT', notNull: true },
+        { name: 'description', type: 'TEXT' },
+        { name: 'symptoms', type: 'TEXT' },
+        { name: 'treatments', type: 'TEXT' },
+        { name: 'image_urls', type: 'TEXT' },
+        { name: 'last_detected_at', type: 'TEXT' },
+        { name: 'detection_count', type: 'INTEGER' }
+      ]
+    },
+    {
+      name: 'favorites',
+      columns: [
+        { name: 'id', type: 'INTEGER', primaryKey: true },
+        { name: 'pest_id', type: 'INTEGER', notNull: true },
+        { name: 'created_at', type: 'TEXT', notNull: true }
+      ]
+    },
+    {
+      name: 'history',
+      columns: [
+        { name: 'id', type: 'INTEGER', primaryKey: true },
+        { name: 'pest_id', type: 'INTEGER', notNull: true },
+        { name: 'created_at', type: 'TEXT', notNull: true },
+        { name: 'confidence', type: 'REAL', notNull: true }
+      ]
+    },
+    {
+      name: 'pest_images',
+      columns: [
+        { name: 'id', type: 'INTEGER', primaryKey: true },
+        { name: 'pest_id', type: 'INTEGER', notNull: true },
+        { name: 'image_url', type: 'TEXT', notNull: true },
+        { name: 'created_at', type: 'TEXT' }
+      ]
+    },
+    {
+      name: 'pest_symptoms',
+      columns: [
+        { name: 'id', type: 'INTEGER', primaryKey: true },
+        { name: 'pest_id', type: 'INTEGER', notNull: true },
+        { name: 'symptom', type: 'TEXT', notNull: true },
+        { name: 'created_at', type: 'TEXT' }
+      ]
+    },
+    {
+      name: 'pest_treatments',
+      columns: [
+        { name: 'id', type: 'INTEGER', primaryKey: true },
+        { name: 'pest_id', type: 'INTEGER', notNull: true },
+        { name: 'treatment', type: 'TEXT', notNull: true },
+        { name: 'created_at', type: 'TEXT' }
+      ]
+    },
+    {
+      name: 'pest_history_details',
+      columns: [
+        { name: 'id', type: 'INTEGER', primaryKey: true },
+        { name: 'history_id', type: 'INTEGER', notNull: true },
+        { name: 'detail', type: 'TEXT', notNull: true },
+        { name: 'created_at', type: 'TEXT' }
+      ]
+    }
+  ],
+  indexes: [
+    { name: 'idx_pests_name', table: 'pests', columns: ['name'] },
+    { name: 'idx_favorites_pest_id', table: 'favorites', columns: ['pest_id'] },
+    { name: 'idx_history_pest_id', table: 'history', columns: ['pest_id'] }
+  ]
+};
+
+export class LocalDatabaseService {
+  private db: SQLiteDatabase | null = null;
+  private cacheService: CacheService;
+
+  constructor() {
+    this.cacheService = new CacheService();
+  }
+
+  private async getDatabase(): Promise<SQLiteDatabase> {
+    if (!this.db) {
+      try {
+        this.db = await SQLite.openDatabase(
+          DATABASE_CONFIG.name,
+          DATABASE_CONFIG.version,
+          DATABASE_CONFIG.size,
+          DATABASE_CONFIG.location,
+          DATABASE_CONFIG.createFromLocation
+        );
+      } catch (error) {
+        console.error('Error opening database:', error);
+        throw new Error(`Failed to open database: ${error}`);
+      }
+    }
+    return this.db!;
+  }
+
   async initializeDatabase(): Promise<void> {
     try {
-      // Open database
-      const db = SQLite.openDatabase(
-        DATABASE_NAME,
-        DATABASE_VERSION,
-        'Kilimo Connect Database',
-        200000
-      );
-
+      console.log('Initializing database...');
+      
+      const db = await this.getDatabase();
+      
       // Create tables
       await this.createTables(db);
-
-      // Initialize backup
-      await backupService.initializeBackup();
-
+      
       // Initialize version control
       await versionControlService.initializeVersionControl();
-
-      // Initialize database optimization
-      await databaseOptimizationService.initializeOptimization();
-
-      // Initialize database migration
-      await databaseMigrationService.initializeMigration();
-
-      // Initialize offline sync
-      await offlineSyncService.initializeSync();
-
+      
+      // Create initial version
+      await versionControlService.createInitialVersion();
+      
       console.log('Database initialized successfully');
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error initializing database:', error);
       throw error;
     }
   },
 
-  async createTables(db: SQLite.SQLiteDatabase): Promise<void> {
+  async createTables(): Promise<void> {
+    const db = await this.getDatabase();
+
     try {
+      // Drop existing tables if they exist
+      const tables = [
+        'pests',
+        'favorites',
+        'history',
+        'pest_images',
+        'pest_symptoms',
+        'pest_treatments',
+        'pest_history_details'
+      ];
+
+      for (const table of tables) {
+        await db.executeSql(`DROP TABLE IF EXISTS ${table}`);
+      }
+
       // Create pests table
-      await db.executeSql(
-        `CREATE TABLE IF NOT EXISTS pests (
+      await db.executeSql(`
+        CREATE TABLE IF NOT EXISTS pests (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           name TEXT NOT NULL,
-          description TEXT,
-          symptoms TEXT,
-          treatment TEXT,
-          image_url TEXT,
-          last_detected_at TIMESTAMP,
-          detection_count INTEGER DEFAULT 0,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )`
-      );
+          description TEXT NOT NULL,
+          symptoms TEXT NOT NULL,
+          treatments TEXT NOT NULL,
+          image_urls TEXT NOT NULL,
+          last_detected_at TEXT NOT NULL,
+          detection_count INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
 
       // Create favorites table
-      await db.executeSql(
-        `CREATE TABLE IF NOT EXISTS favorites (
+      await db.executeSql(`
+        CREATE TABLE IF NOT EXISTS favorites (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           pest_id INTEGER NOT NULL,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          FOREIGN KEY (pest_id) REFERENCES pests (id)
-        )`
-      );
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (pest_id) REFERENCES pests (id) ON DELETE CASCADE
+        )
+      `);
 
       // Create history table
-      await db.executeSql(
-        `CREATE TABLE IF NOT EXISTS history (
+      await db.executeSql(`
+        CREATE TABLE IF NOT EXISTS history (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           pest_id INTEGER NOT NULL,
-          detection_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          image_url TEXT,
-          confidence_score REAL,
-          FOREIGN KEY (pest_id) REFERENCES pests (id)
-        )`
-      );
+          detection_date TEXT NOT NULL,
+          location TEXT,
+          notes TEXT,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (pest_id) REFERENCES pests (id) ON DELETE CASCADE
+        )
+      `);
 
-      // Create pest images table
-      await db.executeSql(
-        `CREATE TABLE IF NOT EXISTS pest_images (
+      // Create pest_images table
+      await db.executeSql(`
+        CREATE TABLE IF NOT EXISTS pest_images (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           pest_id INTEGER NOT NULL,
           image_url TEXT NOT NULL,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          FOREIGN KEY (pest_id) REFERENCES pests (id)
-        )`
-      );
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (pest_id) REFERENCES pests (id) ON DELETE CASCADE
+        )
+      `);
 
-      // Create pest treatments table
-      await db.executeSql(
-        `CREATE TABLE IF NOT EXISTS pest_treatments (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          pest_id INTEGER NOT NULL,
-          treatment TEXT NOT NULL,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          FOREIGN KEY (pest_id) REFERENCES pests (id)
-        )`
-      );
-
-      // Create pest symptoms table
-      await db.executeSql(
-        `CREATE TABLE IF NOT EXISTS pest_symptoms (
+      // Create pest_symptoms table
+      await db.executeSql(`
+        CREATE TABLE IF NOT EXISTS pest_symptoms (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           pest_id INTEGER NOT NULL,
           symptom TEXT NOT NULL,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          FOREIGN KEY (pest_id) REFERENCES pests (id)
-        )`
-      );
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (pest_id) REFERENCES pests (id) ON DELETE CASCADE
+        )
+      `);
 
-      // Create pest history details table
-      await db.executeSql(
-        `CREATE TABLE IF NOT EXISTS pest_history_details (
+      // Create pest_treatments table
+      await db.executeSql(`
+        CREATE TABLE IF NOT EXISTS pest_treatments (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          pest_id INTEGER NOT NULL,
+          treatment TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (pest_id) REFERENCES pests (id) ON DELETE CASCADE
+        )
+      `);
+
+      // Create pest_history_details table
+      await db.executeSql(`
+        CREATE TABLE IF NOT EXISTS pest_history_details (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           history_id INTEGER NOT NULL,
           detail TEXT NOT NULL,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          FOREIGN KEY (history_id) REFERENCES history (id)
-        )`
-      );
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (history_id) REFERENCES history (id) ON DELETE CASCADE
+        )
+      `);
 
       // Create indexes
       await db.executeSql(
@@ -169,522 +294,221 @@ export const localDatabaseService = {
       console.error('Error creating database tables:', error);
       throw error;
     }
-  },
+  }
 
-  async addPest(pest: {
-    name: string;
-    description: string;
-    symptoms: string[];
-    treatments: string[];
-    image_urls: string[];
-    last_detected_at?: string;
-    detection_count?: number;
-  }): Promise<void> {
+  async getFavorites(): Promise<Pest[]> {
     try {
+      const db = await this.getDatabase();
+      
       // Check cache first
-      const cachedPest = await this.cacheQuery(
-        'SELECT * FROM pests WHERE name = ?',
-        [pest.name]
-      );
-
-      if (cachedPest.length > 0) {
-        throw new Error('Pest already exists');
-      }
-
-      const db = SQLite.openDatabase(DATABASE_NAME);
-      
-      // Insert main pest record
-      const [result] = await db.executeSql(
-        `INSERT INTO pests (name, description, last_detected_at, detection_count) 
-         VALUES (?, ?, ?, ?)`,
-        [pest.name, pest.description, pest.last_detected_at || null, pest.detection_count || 0]
-      );
-
-      const pestId = result.insertId;
-
-      // Insert symptoms
-      for (const symptom of pest.symptoms) {
-        await db.executeSql(
-          `INSERT INTO pest_symptoms (pest_id, symptom) 
-           VALUES (?, ?)`,
-          [pestId, symptom]
-        );
-      }
-
-      // Insert treatments
-      for (const treatment of pest.treatments) {
-        await db.executeSql(
-          `INSERT INTO pest_treatments (pest_id, treatment) 
-           VALUES (?, ?)`,
-          [pestId, treatment]
-        );
-      }
-
-      // Insert images
-      for (const imageUrl of pest.image_urls) {
-        await db.executeSql(
-          `INSERT INTO pest_images (pest_id, image_url) 
-           VALUES (?, ?)`,
-          [pestId, imageUrl]
-        );
-      }
-
-      // Create version
-      await versionControlService.createNewVersion({
-        added: ['pests', 'pest_symptoms', 'pest_treatments', 'pest_images'],
-        removed: [],
-        updated: []
-      });
-
-      // Create sync operation
-      await offlineSyncService.addSyncOperation({
-        type: 'create',
-        table: 'pests',
-        data: {
-          id: pestId,
-          name: pest.name,
-          description: pest.description,
-          symptoms: pest.symptoms,
-          treatments: pest.treatments,
-          image_urls: pest.image_urls,
-          last_detected_at: pest.last_detected_at,
-          detection_count: pest.detection_count
-        }
-      });
-
-      console.log('Pest added and sync operation created successfully');
-    } catch (error) {
-      console.error('Error adding pest:', error);
-      throw error;
-    }
-  },
-
-  async updatePest(pest: {
-    id: number;
-    name: string;
-    description: string;
-    symptoms: string[];
-    treatments: string[];
-    image_urls: string[];
-    last_detected_at?: string;
-    detection_count?: number;
-  }): Promise<void> {
-    try {
-      const db = SQLite.openDatabase(DATABASE_NAME);
-      
-      // Update main pest record
-      await db.executeSql(
-        `UPDATE pests 
-         SET name = ?, 
-             description = ?,
-             last_detected_at = ?,
-             detection_count = ?
-         WHERE id = ?`,
-        [
-          pest.name,
-          pest.description,
-          pest.last_detected_at || null,
-          pest.detection_count || 0,
-          pest.id
-        ]
-      );
-
-      // Delete existing symptoms and treatments
-      await db.executeSql(
-        `DELETE FROM pest_symptoms WHERE pest_id = ?`,
-        [pest.id]
-      );
-      await db.executeSql(
-        `DELETE FROM pest_treatments WHERE pest_id = ?`,
-        [pest.id]
-      );
-      await db.executeSql(
-        `DELETE FROM pest_images WHERE pest_id = ?`,
-        [pest.id]
-      );
-
-      // Insert new symptoms and treatments
-      for (const symptom of pest.symptoms) {
-        await db.executeSql(
-          `INSERT INTO pest_symptoms (pest_id, symptom) 
-           VALUES (?, ?)`,
-          [pest.id, symptom]
-        );
-      }
-
-      for (const treatment of pest.treatments) {
-        await db.executeSql(
-          `INSERT INTO pest_treatments (pest_id, treatment) 
-           VALUES (?, ?)`,
-          [pest.id, treatment]
-        );
-      }
-
-      for (const imageUrl of pest.image_urls) {
-        await db.executeSql(
-          `INSERT INTO pest_images (pest_id, image_url) 
-           VALUES (?, ?)`,
-          [pest.id, imageUrl]
-        );
-      }
-
-      // Create version
-      await versionControlService.createNewVersion({
-        added: [],
-        removed: [],
-        updated: ['pests', 'pest_symptoms', 'pest_treatments', 'pest_images']
-      });
-
-      // Create sync operation
-      await offlineSyncService.addSyncOperation({
-        type: 'update',
-        table: 'pests',
-        data: {
-          id: pest.id,
-          name: pest.name,
-          description: pest.description,
-          symptoms: pest.symptoms,
-          treatments: pest.treatments,
-          image_urls: pest.image_urls,
-          last_detected_at: pest.last_detected_at,
-          detection_count: pest.detection_count
-        }
-      });
-
-      console.log('Pest updated and sync operation created successfully');
-    } catch (error) {
-      console.error('Error updating pest:', error);
-      throw error;
-    }
-  },
-
-  async getPest(id: number): Promise<any | null> {
-    try {
-      // Check cache first
-      const cachedPest = await this.cacheQuery(
-        'SELECT p.*, COUNT(h.id) as detection_count 
-         FROM pests p 
-         LEFT JOIN history h ON p.id = h.pest_id 
-         WHERE p.id = ? 
-         GROUP BY p.id',
-        [id]
-      );
-
-      if (cachedPest.length > 0) {
-        const pest = cachedPest[0];
-        
-        // Get symptoms
-        const [symptomsResult] = await db.executeSql(
-          'SELECT symptom FROM pest_symptoms WHERE pest_id = ?',
-          [id]
-        );
-        pest.symptoms = symptomsResult.rows._array.map(row => row.symptom);
-
-        // Get treatments
-        const [treatmentsResult] = await db.executeSql(
-          'SELECT treatment FROM pest_treatments WHERE pest_id = ?',
-          [id]
-        );
-        pest.treatments = treatmentsResult.rows._array.map(row => row.treatment);
-
-        // Get images
-        const [imagesResult] = await db.executeSql(
-          'SELECT image_url FROM pest_images WHERE pest_id = ?',
-          [id]
-        );
-        pest.image_urls = imagesResult.rows._array.map(row => row.image_url);
-
-        return pest;
-      }
-
-      const db = SQLite.openDatabase(DATABASE_NAME);
-      
-      const [result] = await db.executeSql(
-        `SELECT p.*, COUNT(h.id) as detection_count 
-         FROM pests p 
-         LEFT JOIN history h ON p.id = h.pest_id 
-         WHERE p.id = ? 
-         GROUP BY p.id`,
-        [id]
-      );
-
-      if (result.rows.length === 0) return null;
-
-      const pest = result.rows.item(0);
-      
-      // Get symptoms
-      const [symptomsResult] = await db.executeSql(
-        'SELECT symptom FROM pest_symptoms WHERE pest_id = ?',
-        [id]
-      );
-      pest.symptoms = symptomsResult.rows._array.map(row => row.symptom);
-
-      // Get treatments
-      const [treatmentsResult] = await db.executeSql(
-        'SELECT treatment FROM pest_treatments WHERE pest_id = ?',
-        [id]
-      );
-      pest.treatments = treatmentsResult.rows._array.map(row => row.treatment);
-
-      // Get images
-      const [imagesResult] = await db.executeSql(
-        'SELECT image_url FROM pest_images WHERE pest_id = ?',
-        [id]
-      );
-      pest.image_urls = imagesResult.rows._array.map(row => row.image_url);
-
-      return pest;
-    } catch (error) {
-      console.error('Error getting pest:', error);
-      return null;
-    }
-  },
-
-  async getFavorites(): Promise<any[]> {
-    try {
-      // Check cache first
-      const cachedFavorites = await this.cacheQuery(
-        'SELECT p.* FROM pests p JOIN favorites f ON p.id = f.pest_id ORDER BY f.created_at DESC',
-        []
-      );
-
-      if (cachedFavorites.length > 0) {
+      const cachedFavorites = await this.cacheService.get<Pest[]>('favorites');
+      if (cachedFavorites) {
         return cachedFavorites;
       }
 
-      const db = SQLite.openDatabase(DATABASE_NAME);
-      
-      const [result] = await db.executeSql(
-        `SELECT p.* FROM pests p 
-         JOIN favorites f ON p.id = f.pest_id 
-         ORDER BY f.created_at DESC`
-      );
+      // Get favorites from database
+      const favorites = await new Promise<Pest[]>((resolve, reject) => {
+        db.executeSql(
+          `SELECT p.* 
+           FROM pests p 
+           JOIN favorites f ON p.id = f.pest_id 
+           ORDER BY f.created_at DESC`,
+          [],
+          (tx: SQLite.SQLTransaction, results: SQLite.ResultSet) => {
+            const favorites: Pest[] = [];
+            for (let i = 0; i < results.rows.length; i++) {
+              const row = results.rows.item(i);
+              favorites.push({
+                id: row.id,
+                name: row.name,
+                description: row.description,
+                symptoms: JSON.parse(row.symptoms),
+                treatments: JSON.parse(row.treatments),
+                image_urls: JSON.parse(row.image_urls),
+                last_detected_at: row.last_detected_at,
+                detection_count: row.detection_count
+              } as Pest);
+            }
+            resolve(favorites);
+          },
+          (tx: SQLite.SQLTransaction, error: SQLite.SQLError) => reject(error)
+        );
+      });
 
-      return result.rows._array;
+      // Cache the results
+      await this.cacheService.set<Pest[]>('favorites', favorites);
+
+      return favorites;
     } catch (error) {
       console.error('Error getting favorites:', error);
-      return [];
-    }
-  },
-
-  async addFavorite(pestId: number): Promise<void> {
-    try {
-      const db = SQLite.openDatabase(DATABASE_NAME);
-      
-      await db.executeSql(
-        `INSERT INTO favorites (pest_id) VALUES (?)`,
-        [pestId]
-      );
-
-      // Create version
-      await versionControlService.createNewVersion({
-        added: ['favorites'],
-        removed: [],
-        updated: []
-      });
-
-      console.log('Favorite added successfully');
-    } catch (error) {
-      console.error('Error adding favorite:', error);
       throw error;
     }
-  },
-
-  async removeFavorite(pestId: number): Promise<void> {
-    try {
-      const db = SQLite.openDatabase(DATABASE_NAME);
-      
-      await db.executeSql(
-        `DELETE FROM favorites WHERE pest_id = ?`,
-        [pestId]
-      );
-
-      // Create version
-      await versionControlService.createNewVersion({
-        added: [],
-        removed: ['favorites'],
-        updated: []
-      });
-
-      console.log('Favorite removed successfully');
-    } catch (error) {
-      console.error('Error removing favorite:', error);
-      throw error;
-    }
-  },
-
-  async addHistory(pestId: number, confidence: number): Promise<void> {
-    try {
-      const db = SQLite.openDatabase(DATABASE_NAME);
-      
-      await db.executeSql(
-        `INSERT INTO history (pest_id, confidence) VALUES (?, ?)`,
-        [pestId, confidence]
-      );
-
-      // Create version
-      await versionControlService.createNewVersion({
-        added: ['history'],
-        removed: [],
-        updated: []
-      });
-
-      console.log('History added successfully');
-    } catch (error) {
-      console.error('Error adding history:', error);
-      throw error;
-    }
-  },
-
-  async getHistory(limit: number = 10): Promise<any[]> {
-    try {
-      // Check cache first
-      const cachedHistory = await this.cacheQuery(
-        `SELECT h.*, p.name as pest_name, COUNT(d.id) as detail_count 
-         FROM history h 
-         JOIN pests p ON h.pest_id = p.id 
-         LEFT JOIN pest_history_details d ON h.id = d.history_id 
-         ORDER BY h.detection_date DESC 
-         LIMIT ?`,
-        [limit]
-      );
-
-      if (cachedHistory.length > 0) {
-        return cachedHistory;
-      }
-
-      const db = SQLite.openDatabase(DATABASE_NAME);
-      
-      const [result] = await db.executeSql(
-        `SELECT h.*, p.name as pest_name, COUNT(d.id) as detail_count 
-         FROM history h 
-         JOIN pests p ON h.pest_id = p.id 
-         LEFT JOIN pest_history_details d ON h.id = d.history_id 
-         ORDER BY h.detection_date DESC 
-         LIMIT ?`,
-        [limit]
-      );
-
-      const history = result.rows._array;
-
-      // Get details for each history entry
-      for (const entry of history) {
-        const [detailsResult] = await db.executeSql(
-          'SELECT detail FROM pest_history_details WHERE history_id = ?',
-          [entry.id]
-        );
-        entry.details = detailsResult.rows._array.map(row => row.detail);
-      }
-
-      return history;
-    } catch (error) {
-      console.error('Error getting history:', error);
-      return [];
-    }
-  },
+  }
 
   async clearDatabase(): Promise<void> {
     try {
-      const db = SQLite.openDatabase(DATABASE_NAME);
+      const db = await this.getDatabase();
       
-      // Delete all tables
-      await db.executeSql('DROP TABLE IF EXISTS pests');
-      await db.executeSql('DROP TABLE IF EXISTS favorites');
-      await db.executeSql('DROP TABLE IF EXISTS history');
-
-      // Recreate tables
-      await this.createTables(db);
-
-      // Create version
-      await versionControlService.createNewVersion({
-        added: [],
-        removed: ['pests', 'favorites', 'history'],
-        updated: []
+      // Drop all tables
+      await new Promise<void>((resolve, reject) => {
+        db.executeSql(`DROP TABLE IF EXISTS pests`, [], resolve, reject);
+      });
+      await new Promise<void>((resolve, reject) => {
+        db.executeSql(`DROP TABLE IF EXISTS favorites`, [], resolve, reject);
+      });
+      await new Promise<void>((resolve, reject) => {
+        db.executeSql(`DROP TABLE IF EXISTS history`, [], resolve, reject);
+      });
+      await new Promise<void>((resolve, reject) => {
+        db.executeSql(`DROP TABLE IF EXISTS pest_images`, [], resolve, reject);
+      });
+      await new Promise<void>((resolve, reject) => {
+        db.executeSql(`DROP TABLE IF EXISTS pest_symptoms`, [], resolve, reject);
+      });
+      await new Promise<void>((resolve, reject) => {
+        db.executeSql(`DROP TABLE IF EXISTS pest_treatments`, [], resolve, reject);
+      });
+      await new Promise<void>((resolve, reject) => {
+        db.executeSql(`DROP TABLE IF EXISTS pest_history_details`, [], resolve, reject);
       });
 
-      console.log('Database cleared successfully');
+      // Clear cache
+      await AsyncStorage.clear();
+
+      // Create new tables
+      await this.createTables();
+
+      console.log('Database cleared and recreated successfully');
     } catch (error) {
       console.error('Error clearing database:', error);
       throw error;
     }
-  },
+  }
 
   async backupDatabase(): Promise<void> {
     try {
-      const db = SQLite.openDatabase(DATABASE_NAME);
+      const db = await this.getDatabase();
       
       // Get all data
-      const [pestsResult] = await db.executeSql('SELECT * FROM pests');
-      const [favoritesResult] = await db.executeSql('SELECT * FROM favorites');
-      const [historyResult] = await db.executeSql('SELECT * FROM history');
+      const pestsResult = await new Promise<SQLite.ResultSet>((resolve, reject) => {
+        db.executeSql(
+          'SELECT * FROM pests',
+          [],
+          (tx: Transaction, results: ResultSet) => resolve(results),
+          (tx: Transaction, error: SQLite.SQLError) => reject(error)
+        );
+      });
 
+      const favoritesResult = await new Promise<SQLite.ResultSet>((resolve, reject) => {
+        db.executeSql(
+          'SELECT * FROM favorites',
+          [],
+          (tx: Transaction, results: ResultSet) => resolve(results),
+          (tx: Transaction, error: SQLite.SQLError) => reject(error)
+        );
+      });
+
+      const historyResult = await new Promise<SQLite.ResultSet>((resolve, reject) => {
+        db.executeSql(
+          'SELECT * FROM history',
+          [],
+          (tx: Transaction, results: ResultSet) => resolve(results),
+          (tx: Transaction, error: SQLite.SQLError) => reject(error)
+        );
+      });
+
+      // Create backup data
       const backupData = {
-        pests: pestsResult.rows._array,
-        favorites: favoritesResult.rows._array,
-        history: historyResult.rows._array,
+        pests: Array.from(pestsResult.rows._array),
+        favorites: Array.from(favoritesResult.rows._array),
+        history: Array.from(historyResult.rows._array),
         timestamp: Date.now()
       };
 
-      // Save backup
-      await backupService.saveBackup(backupData);
+      // Store backup
+      await AsyncStorage.setItem('database_backup', JSON.stringify(backupData));
 
       console.log('Database backup created successfully');
     } catch (error) {
       console.error('Error creating database backup:', error);
       throw error;
     }
-  },
+  }
 
   async restoreDatabase(): Promise<void> {
     try {
-      const backup = await backupService.getBackup();
-      if (!backup) {
-        throw new Error('No backup found');
+      const db = await this.getDatabase();
+      
+      // Get backup data
+      const backupData = await AsyncStorage.getItem('database_backup');
+      if (!backupData) {
+        throw new Error('No backup data found');
       }
 
-      const db = SQLite.openDatabase(DATABASE_NAME);
-      
+      const { pests, favorites, history } = JSON.parse(backupData);
+
       // Clear existing data
       await this.clearDatabase();
 
-      // Insert backup data
-      if (backup.pests) {
-        for (const pest of backup.pests) {
-          await db.executeSql(
-            `INSERT INTO pests (id, name, description, symptoms, treatment, image_url, created_at, updated_at) 
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      // Restore pests
+      for (const pest of pests) {
+        await new Promise<void>((resolve, reject) => {
+          db.executeSql(
+            `INSERT INTO pests (id, name, description, symptoms, treatments, image_urls, last_detected_at, detection_count, created_at, updated_at) 
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               pest.id,
               pest.name,
               pest.description,
-              pest.symptoms,
-              pest.treatment,
-              pest.image_url,
+              JSON.stringify(pest.symptoms),
+              JSON.stringify(pest.treatments),
+              JSON.stringify(pest.image_urls),
+              pest.last_detected_at,
+              pest.detection_count,
               pest.created_at,
               pest.updated_at
-            ]
+            ],
+            (tx: Transaction, results: ResultSet) => resolve(),
+            (tx: Transaction, error: SQLite.SQLError) => reject(error)
           );
-        }
+        });
       }
 
-      if (backup.favorites) {
-        for (const favorite of backup.favorites) {
-          await db.executeSql(
+      // Restore favorites
+      for (const favorite of favorites) {
+        await new Promise<void>((resolve, reject) => {
+          db.executeSql(
             `INSERT INTO favorites (id, pest_id, created_at) 
              VALUES (?, ?, ?)`,
-            [favorite.id, favorite.pest_id, favorite.created_at]
+            [
+              favorite.id,
+              favorite.pest_id,
+              favorite.created_at
+            ],
+            (tx: Transaction, results: ResultSet) => resolve(),
+            (tx: Transaction, error: SQLite.SQLError) => reject(error)
           );
-        }
+        });
       }
 
-      if (backup.history) {
-        for (const history of backup.history) {
-          await db.executeSql(
-            `INSERT INTO history (id, pest_id, detection_date, confidence) 
-             VALUES (?, ?, ?, ?)`,
-            [history.id, history.pest_id, history.detection_date, history.confidence]
+      // Restore history
+      for (const historyItem of history) {
+        await new Promise<void>((resolve, reject) => {
+          db.executeSql(
+            `INSERT INTO history (id, pest_id, created_at) 
+             VALUES (?, ?, ?)`,
+            [
+              historyItem.id,
+              historyItem.pest_id,
+              historyItem.detection_date,
+              historyItem.location,
+              historyItem.notes,
+              historyItem.created_at
+            ],
+            (tx: Transaction, results: ResultSet) => resolve(),
+            (tx: Transaction, error: SQLite.SQLError) => reject(error)
           );
-        }
+        });
       }
 
       // Create version
@@ -700,4 +524,4 @@ export const localDatabaseService = {
       throw error;
     }
   }
-};
+}

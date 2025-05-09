@@ -1,54 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator, Alert, FlatList, Modal } from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator, Alert, FlatList, Modal, ScrollView, Image } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
-import { weatherService } from '../../services/weatherService';
-import { locationsService } from '../../services/locationsService';
-
-interface WeatherData {
-  main: {
-    temp: number;
-    humidity: number;
-    pressure: number;
-    temp_min: number;
-    temp_max: number;
-    feels_like: number;
-  };
-  weather: Array<{
-    description: string;
-    icon: string;
-    main: string;
-  }>;
-  name: string;
-  wind: {
-    speed: number;
-    deg: number;
-    gust: number;
-  };
-  sys: {
-    sunrise: number;
-    sunset: number;
-    country: string;
-  };
-  visibility: number;
-  clouds: {
-    all: number;
-  };
-  dt: number;
-  rain?: {
-    '1h': number;
-  };
-  snow?: {
-    '1h': number;
-  };
-  uv?: number;
-  pop?: number;
-}
+import { weatherService } from '../services/weatherService';
+import { locationsService } from '../services/locationsService';
+import { WeatherData, WeatherForecast, WeatherAlert } from '../types/weather';
 
 const WeatherScreen = () => {
   const [showFavoritesModal, setShowFavoritesModal] = useState(false);
   const [favoriteLocations, setFavoriteLocations] = useState<string[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [weatherData, setWeatherData] = useState<WeatherData | null>(null);
+  const [forecastData, setForecastData] = useState<WeatherForecast | null>(null);
+  const [alerts, setAlerts] = useState<WeatherAlert[]>([]);
   const [loading, setLoading] = useState(false);
   const [offline, setOffline] = useState(false);
   const [error, setError] = useState('');
@@ -66,8 +29,18 @@ const WeatherScreen = () => {
     setError('');
 
     try {
-      const data = await weatherService.fetchWeather(searchQuery);
-      setWeatherData(data);
+      // Fetch current weather
+      const currentWeather = await weatherService.fetchWeather(searchQuery);
+      setWeatherData(currentWeather);
+
+      // Fetch forecast
+      const forecast = await weatherService.fetchForecast(searchQuery);
+      setForecastData(forecast);
+
+      // Fetch alerts
+      const alerts = await weatherService.getWeatherAlerts();
+      setAlerts(alerts);
+
       setOffline(false);
     } catch (err) {
       if (err.message === 'Network request failed') {
@@ -202,132 +175,87 @@ const WeatherScreen = () => {
         </View>
       )}
 
-      {error && (
-        <Text style={styles.errorText}>{error}</Text>
-      )}
-
       {weatherData && (
-        <View style={styles.weatherContainer}>
-          <Text style={styles.cityName}>{weatherData.name}</Text>
-          
-          <View style={styles.weatherInfo}>
-            <Text style={styles.temperature}>
-              {Math.round(weatherData.main.temp)}°C
-            </Text>
-            <Text style={styles.weatherDescription}>
-              {weatherData.weather[0].description}
-            </Text>
+        <ScrollView style={styles.weatherContainer}>
+          {/* Current Weather */}
+          <View style={styles.currentWeatherContainer}>
+            <Text style={styles.cityName}>{weatherData.name}</Text>
+            <View style={styles.currentWeatherInfo}>
+              <Image
+                source={{ uri: getWeatherIcon(weatherData.weather[0].icon) }}
+                style={styles.weatherIcon}
+              />
+              <Text style={styles.temperature}>
+                {Math.round(weatherData.main.temp)}°C
+              </Text>
+              <Text style={styles.weatherDescription}>
+                {weatherData.weather[0].description}
+              </Text>
+            </View>
+            <View style={styles.weatherDetails}>
+              <Text style={styles.detailLabel}>Ukame:</Text>
+              <Text style={styles.detailValue}>{weatherData.main.humidity}%</Text>
+              <Text style={styles.detailLabel}>Mafaa:</Text>
+              <Text style={styles.detailValue}>{weatherData.main.pressure} hPa</Text>
+              <Text style={styles.detailLabel}>Mvua:</Text>
+              <Text style={styles.detailValue}>{weatherData.rain?.['1h'] || 0} mm</Text>
+              <Text style={styles.detailLabel}>Uvumbuzi:</Text>
+              <Text style={styles.detailValue}>{weatherData.wind.speed} m/s</Text>
+            </View>
           </View>
 
-          <View style={styles.detailsContainer}>
-            <View style={styles.detailRow}>
-              <View style={styles.detailItem}>
-                <Text style={styles.detailLabel}>Urefu:</Text>
-                <Text style={styles.detailValue}>
-                  {weatherData.main.humidity}%
-                </Text>
-              </View>
-              <View style={styles.detailItem}>
-                <Text style={styles.detailLabel}>Bara:</Text>
-                <Text style={styles.detailValue}>
-                  {weatherData.main.pressure} hPa
-                </Text>
-              </View>
+          {/* Weather Alerts */}
+          {alerts.length > 0 && (
+            <View style={styles.alertsContainer}>
+              <Text style={styles.alertsTitle}>Huduma za Matoa</Text>
+              {alerts.map((alert) => (
+                <View key={alert.id} style={styles.alertItem}>
+                  <Text style={styles.alertEvent}>{alert.event}</Text>
+                  <Text style={styles.alertDescription}>{alert.description}</Text>
+                  <Text style={styles.alertTime}>
+                    {new Date(alert.start * 1000).toLocaleString()} -
+                    {new Date(alert.end * 1000).toLocaleString()}
+                  </Text>
+                </View>
+              ))}
             </View>
-            <View style={styles.detailRow}>
-              <View style={styles.detailItem}>
-                <Text style={styles.detailLabel}>Mvua:</Text>
-                <Text style={styles.detailValue}>
-                  {weatherData.wind.speed} m/s
-                </Text>
-              </View>
-              <View style={styles.detailItem}>
-                <Text style={styles.detailLabel}>Mwanga:</Text>
-                <Text style={styles.detailValue}>
-                  {new Date(weatherData.sys.sunrise * 1000).toLocaleTimeString()} - {new Date(weatherData.sys.sunset * 1000).toLocaleTimeString()}
-                </Text>
-              </View>
-            </View>
-            <View style={styles.detailRow}>
-              <View style={styles.detailItem}>
-                <Text style={styles.detailLabel}>Mwaka:</Text>
-                <Text style={styles.detailValue}>
-                  {new Date(weatherData.dt * 1000).toLocaleDateString()} {new Date(weatherData.dt * 1000).toLocaleTimeString()}
-                </Text>
-              </View>
-              <View style={styles.detailItem}>
-                <Text style={styles.detailLabel}>Mawingu:</Text>
-                <Text style={styles.detailValue}>
-                  {weatherData.clouds.all}%
-                </Text>
-              </View>
-            </View>
-            <View style={styles.detailRow}>
-              <View style={styles.detailItem}>
-                <Text style={styles.detailLabel}>Kuona:</Text>
-                <Text style={styles.detailValue}>
-                  {weatherData.visibility / 1000} km
-                </Text>
-              </View>
-              <View style={styles.detailItem}>
-                <Text style={styles.detailLabel}>Mwaka:</Text>
-                <Text style={styles.detailValue}>
-                  {new Date(weatherData.dt * 1000).toLocaleDateString()} {new Date(weatherData.dt * 1000).toLocaleTimeString()}
-                </Text>
-              </View>
-            </View>
-            <View style={styles.detailRow}>
-              <View style={styles.detailItem}>
-                <Text style={styles.detailLabel}>Maji:</Text>
-                <Text style={styles.detailValue}>
-                  {weatherData.rain?.['1h'] ? `${weatherData.rain['1h']} mm` : 'Hakuna'}
-                </Text>
-              </View>
-              <View style={styles.detailItem}>
-                <Text style={styles.detailLabel}>Kifupi:</Text>
-                <Text style={styles.detailValue}>
-                  {weatherData.snow?.['1h'] ? `${weatherData.snow['1h']} mm` : 'Hakuna'}
-                </Text>
-              </View>
-            </View>
-            <View style={styles.detailRow}>
-              <View style={styles.detailItem}>
-                <Text style={styles.detailLabel}>UV:</Text>
-                <Text style={styles.detailValue}>
-                  {weatherData.uv ? weatherData.uv.toFixed(1) : 'Hakuna'}
-                </Text>
-              </View>
-              <View style={styles.detailItem}>
-                <Text style={styles.detailLabel}>Ugavu:</Text>
-                <Text style={styles.detailValue}>
-                  {weatherData.pop ? `${(weatherData.pop * 100).toFixed(0)}%` : 'Hakuna'}
-                </Text>
-              </View>
-            </View>
-            <View style={styles.detailRow}>
-              <View style={styles.detailItem}>
-                <Text style={styles.detailLabel}>Mvua ya Kasi:</Text>
-                <Text style={styles.detailValue}>
-                  {weatherData.wind.gust ? `${weatherData.wind.gust.toFixed(1)} m/s` : 'Hakuna'}
-                </Text>
-              </View>
-              <View style={styles.detailItem}>
-                <Text style={styles.detailLabel}>Ujuzi:</Text>
-                <Text style={styles.detailValue}>
-                  {weatherData.main.feels_like.toFixed(1)}°C
-                </Text>
-              </View>
-            </View>
+          )}
+
+          {/* Weather Forecast */}
+          <View style={styles.forecastContainer}>
+            <Text style={styles.forecastTitle}>Matoa ya Maisha</Text>
+            <FlatList
+              data={forecastData?.list || []}
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              keyExtractor={(item) => item.dt.toString()}
+              renderItem={({ item }) => (
+                <View style={styles.forecastItem}>
+                  <Text style={styles.forecastTime}>
+                    {new Date(item.dt * 1000).toLocaleTimeString([], {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
+                  </Text>
+                  <Image
+                    source={{ uri: getWeatherIcon(item.weather[0].icon) }}
+                    style={styles.forecastIcon}
+                  />
+                  <Text style={styles.forecastTemp}>
+                    {Math.round(item.main.temp)}°C
+                  </Text>
+                  <Text style={styles.forecastDescription}>
+                    {item.weather[0].description}
+                  </Text>
+                  <Text style={styles.forecastRain}>
+                    {item.rain?.['3h'] || 0} mm
+                  </Text>
+                </View>
+              )}
+            />
           </View>
-        </View>
+        </ScrollView>
       )}
-
-      <TouchableOpacity 
-        style={styles.backButton}
-        onPress={() => navigation.goBack()}
-      >
-        <Text style={styles.backButtonText}>Rudi nyuma</Text>
-      </TouchableOpacity>
     </View>
   );
 };
@@ -335,8 +263,128 @@ const WeatherScreen = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: '#f5f5f5',
+  },
+  weatherContainer: {
+    flex: 1,
     padding: 20,
+  },
+  currentWeatherContainer: {
     backgroundColor: '#fff',
+    borderRadius: 10,
+    padding: 20,
+    marginVertical: 10,
+    elevation: 2,
+  },
+  cityName: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    marginBottom: 10,
+  },
+  currentWeatherInfo: {
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  weatherIcon: {
+    width: 100,
+    height: 100,
+    marginBottom: 10,
+  },
+  temperature: {
+    fontSize: 48,
+    fontWeight: 'bold',
+  },
+  weatherDescription: {
+    fontSize: 16,
+    color: '#666',
+  },
+  weatherDetails: {
+    marginTop: 20,
+  },
+  detailLabel: {
+    fontSize: 14,
+    color: '#666',
+    marginBottom: 5,
+  },
+  detailValue: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginBottom: 10,
+  },
+  alertsContainer: {
+    backgroundColor: '#fff',
+    borderRadius: 10,
+    padding: 20,
+    marginVertical: 10,
+    elevation: 2,
+  },
+  alertsTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    marginBottom: 10,
+  },
+  alertItem: {
+    backgroundColor: '#ffebee',
+    padding: 15,
+    borderRadius: 5,
+    marginBottom: 10,
+  },
+  alertEvent: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#c62828',
+  },
+  alertDescription: {
+    fontSize: 14,
+    color: '#666',
+    marginBottom: 5,
+  },
+  alertTime: {
+    fontSize: 14,
+    color: '#666',
+  },
+  forecastContainer: {
+    backgroundColor: '#fff',
+    borderRadius: 10,
+    padding: 20,
+    marginVertical: 10,
+    elevation: 2,
+  },
+  forecastTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    marginBottom: 10,
+  },
+  forecastItem: {
+    backgroundColor: '#fff',
+    padding: 15,
+    borderRadius: 5,
+    marginHorizontal: 10,
+    elevation: 1,
+  },
+  forecastTime: {
+    fontSize: 14,
+    color: '#666',
+    marginBottom: 5,
+  },
+  forecastIcon: {
+    width: 50,
+    height: 50,
+    marginBottom: 5,
+  },
+  forecastTemp: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginBottom: 5,
+  },
+  forecastDescription: {
+    fontSize: 14,
+    color: '#666',
+    marginBottom: 5,
+  },
+  forecastRain: {
+    fontSize: 14,
+    color: '#666',
   },
   title: {
     fontSize: 24,
@@ -457,50 +505,6 @@ const styles = StyleSheet.create({
     color: 'red',
     textAlign: 'center',
     marginTop: 20,
-  },
-  weatherContainer: {
-    alignItems: 'center',
-  },
-  cityName: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    marginBottom: 10,
-  },
-  weatherInfo: {
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  temperature: {
-    fontSize: 48,
-    fontWeight: 'bold',
-  },
-  weatherDescription: {
-    fontSize: 16,
-    color: '#666',
-  },
-  detailsContainer: {
-    width: '100%',
-    marginTop: 20,
-  },
-  detailRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 15,
-    padding: 10,
-    backgroundColor: '#f5f5f5',
-    borderRadius: 8,
-  },
-  detailItem: {
-    flex: 1,
-    alignItems: 'center',
-  },
-  detailLabel: {
-    color: '#666',
-    marginBottom: 5,
-  },
-  detailValue: {
-    fontSize: 16,
-    fontWeight: 'bold',
   },
   backButton: {
     backgroundColor: '#4CAF50',

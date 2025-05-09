@@ -22,18 +22,28 @@ const DEFAULT_SCHEDULE = {
   daily: true,
   weekly: true,
   monthly: true,
+  dailyInterval: 24 * 60 * 60 * 1000, // 24 hours
+  weeklyInterval: 7 * 24 * 60 * 60 * 1000, // 7 days
+  monthlyInterval: 30 * 24 * 60 * 60 * 1000, // 30 days
+  syncInterval: 4 * 60 * 60 * 1000, // 4 hours
   lastBackup: null,
   lastSync: null,
-  validationStatus: 'pending'
+  validationStatus: 'pending',
+  lastValidation: null
 } as const;
 
 export interface BackupSchedule {
   daily: boolean;
   weekly: boolean;
   monthly: boolean;
+  dailyInterval: number;
+  weeklyInterval: number;
+  monthlyInterval: number;
+  syncInterval: number;
   lastBackup: number | null;
   lastSync: number | null;
   validationStatus: 'pending' | 'valid' | 'invalid';
+  lastValidation: number | null;
 }
 
 interface BackupData {
@@ -135,6 +145,126 @@ export class BackupSchedulerService {
     return BackupSchedulerService.instance;
   }
 
+  private async logBackupFailure(type: 'daily' | 'weekly' | 'monthly' | 'schedule', error: any): Promise<void> {
+    try {
+      const timestamp = Date.now();
+      const logEntry = {
+        type: 'backup_failure',
+        timestamp,
+        backupType: type,
+        errorMessage: error.message || 'Unknown error',
+        stackTrace: error.stack || 'No stack trace available',
+        errorType: error.constructor.name || 'UnknownError',
+        context: {
+          device: 'mobile',
+          platform: 'react-native',
+          timestamp: new Date(timestamp).toISOString()
+        }
+      };
+      
+      await asyncStorage.setItem(`backup_failure_${timestamp}`, JSON.stringify(logEntry));
+      console.error(`Backup failure logged: ${error.message || 'Unknown error'}`);
+    } catch (logError) {
+      console.error('Error logging backup failure:', logError);
+    }
+  }
+
+  private async logBackupSuccess(type: 'daily' | 'weekly' | 'monthly', result: any): Promise<void> {
+    try {
+      const timestamp = Date.now();
+      const logEntry = {
+        type: 'backup_success',
+        timestamp,
+        backupType: type,
+        backupSize: result.size,
+        backupDuration: result.duration,
+        backupLocation: result.location,
+        backupVersion: result.version,
+        context: {
+          device: 'mobile',
+          platform: 'react-native',
+          timestamp: new Date(timestamp).toISOString()
+        }
+      };
+      
+      await asyncStorage.setItem(`backup_success_${timestamp}`, JSON.stringify(logEntry));
+      console.log(`Backup success logged: ${type} backup completed`);
+    } catch (logError) {
+      console.error('Error logging backup success:', logError);
+    }
+  }
+
+  private async logValidationFailure(error: Error): Promise<void> {
+    try {
+      const timestamp = Date.now();
+      const logEntry = {
+        type: 'validation_failure',
+        timestamp,
+        errorMessage: error.message,
+        stackTrace: error.stack,
+        context: {
+          device: 'mobile',
+          platform: 'react-native',
+          timestamp: new Date(timestamp).toISOString()
+        }
+      };
+      
+      await asyncStorage.setItem(`validation_failure_${timestamp}`, JSON.stringify(logEntry));
+      console.error(`Validation failure logged: ${error.message}`);
+    } catch (logError) {
+      console.error('Error logging validation failure:', logError);
+    }
+  }
+
+  private async logSyncSuccess(result: any): Promise<void> {
+    try {
+      const timestamp = Date.now();
+      const logEntry = {
+        type: 'sync_success',
+        timestamp,
+        syncType: 'cloud',
+        syncSize: result.size,
+        syncDuration: result.duration,
+        syncLocation: result.location,
+        syncVersion: result.version,
+        context: {
+          device: 'mobile',
+          platform: 'react-native',
+          timestamp: new Date(timestamp).toISOString()
+        }
+      };
+      
+      await asyncStorage.setItem(`sync_success_${timestamp}`, JSON.stringify(logEntry));
+      console.log('Sync success logged: Cloud sync completed');
+    } catch (logError) {
+      console.error('Error logging sync success:', logError);
+    }
+  }
+
+  private async logSyncFailure(error: any): Promise<void> {
+    try {
+      const timestamp = Date.now();
+      const logEntry = {
+        type: 'sync_failure',
+        timestamp,
+        syncType: 'cloud',
+        errorMessage: error.message || 'Unknown error',
+        stackTrace: error.stack || 'No stack trace available',
+        errorType: error.constructor.name || 'UnknownError',
+        context: {
+          device: 'mobile',
+          platform: 'react-native',
+          timestamp: new Date(timestamp).toISOString()
+        }
+      };
+      
+      await asyncStorage.setItem(`sync_failure_${timestamp}`, JSON.stringify(logEntry));
+      console.error(`Sync failure logged: ${error.message || 'Unknown error'}`);
+    } catch (logError) {
+      console.error('Error logging sync failure:', logError);
+    }
+  }
+
   async initializeScheduler(): Promise<void> {
     try {
       // Load schedule settings
@@ -164,9 +294,17 @@ export class BackupSchedulerService {
         ...currentSchedule,
         ...schedule
       };
+      
+      // Validate schedule configuration
+      if (!newSchedule.daily && !newSchedule.weekly && !newSchedule.monthly) {
+        throw new Error('At least one backup frequency must be enabled');
+      }
+
       await asyncStorage.setItem(SCHEDULE_KEY, JSON.stringify(newSchedule));
+      console.log('Backup schedule updated successfully');
     } catch (error) {
       console.error('Error setting backup schedule:', error);
+      await this.logBackupFailure('schedule', error);
       throw error;
     }
   }
@@ -200,29 +338,36 @@ export class BackupSchedulerService {
       const lastBackup = schedule.lastBackup || 0;
 
       // Check daily backup
-      if (schedule.daily && now - lastBackup >= 24 * 60 * 60 * 1000) {
+      if (schedule.daily && now - lastBackup >= schedule.dailyInterval) {
         await this.createScheduledBackup('daily');
       }
 
       // Check weekly backup
-      if (schedule.weekly && now - lastBackup >= 7 * 24 * 60 * 60 * 1000) {
+      if (schedule.weekly && now - lastBackup >= schedule.weeklyInterval) {
         await this.createScheduledBackup('weekly');
       }
 
       // Check monthly backup
-      if (schedule.monthly && now - lastBackup >= 30 * 24 * 60 * 60 * 1000) {
+      if (schedule.monthly && now - lastBackup >= schedule.monthlyInterval) {
         await this.createScheduledBackup('monthly');
+      }
+
+      // Check validation status
+      if (schedule.validationStatus === 'pending' && 
+          (schedule.lastValidation === null || now - schedule.lastValidation >= schedule.dailyInterval)) {
+        await this.validateBackup();
       }
     } catch (error) {
       console.error('Error checking backup schedule:', error);
+      await this.logBackupFailure('schedule', error);
     }
   }
 
   private async createScheduledBackup(type: 'daily' | 'weekly' | 'monthly'): Promise<void> {
     try {
       // Create backup
-      await backupService.createBackup();
-
+      const backupResult = await backupService.createBackup();
+      
       // Create version
       await versionControlService.createNewVersion({
         added: [],
@@ -232,17 +377,24 @@ export class BackupSchedulerService {
 
       // Update schedule
       const schedule = await this.getSchedule();
-      if (schedule) {
-        await this.setSchedule({
-          ...schedule,
-          lastBackup: Date.now(),
-          validationStatus: 'pending'
-        });
+      if (!schedule) {
+        throw new Error('Failed to get backup schedule');
       }
 
-      console.log(`Scheduled ${type} backup completed`);
+      await this.setSchedule({
+        ...schedule,
+        lastBackup: Date.now(),
+        validationStatus: 'pending',
+        lastValidation: null
+      });
+
+      // Log backup success
+      await this.logBackupSuccess(type, backupResult);
+      console.log(`Scheduled ${type} backup completed successfully`);
     } catch (error) {
       console.error(`Error creating scheduled ${type} backup:`, error);
+      // Log backup failure
+      await this.logBackupFailure(type, error);
     }
   }
 
@@ -265,19 +417,21 @@ export class BackupSchedulerService {
       const lastSync = schedule.lastSync || 0;
 
       // Check if sync is needed
-      if (now - lastSync >= 4 * 60 * 60 * 1000) { // Every 4 hours
-        await cloudSyncService.syncWithCloud();
+      if (now - lastSync >= schedule.syncInterval) {
+        const syncResult = await cloudSyncService.syncWithCloud();
         
         // Update schedule
-        if (schedule) {
-          await this.setSchedule({
-            ...schedule,
-            lastSync: Date.now()
-          });
-        }
+        await this.setSchedule({
+          ...schedule,
+          lastSync: Date.now()
+        });
+
+        // Log sync success
+        await this.logSyncSuccess(syncResult);
       }
     } catch (error) {
       console.error('Error checking sync schedule:', error);
+      await this.logSyncFailure(error);
     }
   }
 
@@ -324,24 +478,26 @@ export class BackupSchedulerService {
     try {
       // Validate backup data structure
       if (!backup.timestamp || !backup.version) {
-        return false;
+        throw new Error('Invalid backup structure: missing required fields');
       }
 
       // Validate data integrity
       const versionHistory = await versionControlService.getVersionHistory();
       if (!versionHistory || versionHistory.length === 0) {
-        return false;
+        throw new Error('No version history found');
       }
 
       // Validate sync status
       const syncData = await cloudSyncService.getSyncData();
       if (!syncData || syncData.syncStatus !== 'synced') {
-        return false;
+        throw new Error('Backup not synced with cloud');
       }
 
       return true;
     } catch (error) {
       console.error('Error validating backup integrity:', error);
+      // Log validation failure
+      await this.logValidationFailure(error as Error);
       return false;
     }
   }

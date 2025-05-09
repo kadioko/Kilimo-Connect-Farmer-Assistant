@@ -12,6 +12,22 @@ export interface BackupData {
   favorites: string[];
   pestCache: Record<string, any>;
   version: string;
+  pests?: Array<{
+    id: number;
+    name: string;
+    description: string;
+    symptoms: string[];
+    treatments: string[];
+    image_urls: string[];
+    last_detected_at?: string;
+    detection_count?: number;
+  }>;
+  history?: Array<{
+    id: number;
+    pest_id: number;
+    confidence: number;
+    created_at: string;
+  }>;
 }
 
 export interface BackupHistoryItem {
