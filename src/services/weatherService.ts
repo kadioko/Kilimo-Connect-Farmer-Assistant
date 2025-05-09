@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { WeatherData, WeatherForecast, WeatherAlert } from '../types/weather';
-import { WEATHER_API_KEY, WEATHER_API_BASE_URL } from '../config/weather';
+const WEATHER_API_KEY = process.env.WEATHER_API_KEY || 'YOUR_API_KEY';
+const WEATHER_API_BASE_URL = 'https://api.openweathermap.org/data/2.5';
 import { locationsService } from '../services/locationsService';
 
 const WEATHER_CACHE_KEY = 'weather_cache';
